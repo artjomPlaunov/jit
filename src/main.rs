@@ -1,51 +1,143 @@
 use std::env;
-use std::process;
-use std::path::{Path,PathBuf};
-use std::str::FromStr;
+use std::env::current_dir;
 use std::fs;
+use std::path::PathBuf;
+use std::process;
+use std::io;
 
-fn main() -> std::io::Result<()> {
-    let args: Vec<String> = env::args().collect();
-    
-    if args.len() < 2 {
-        eprintln!("expecting jit info <dir>");
-        process::exit(1);
+fn initialize_repo_directory(mut path_buf: PathBuf) -> io::Result<()> {
+    path_buf.push(".git");
+    let dirs = ["objects", "refs"];
+    for dir in dirs.into_iter() {
+        path_buf.push(dir);
+        fs::create_dir_all(&path_buf)?;
+        path_buf.pop();
     }
-    let cmd: &String = &args[1];
-    if cmd != "init" {
-        eprintln!("expected init command");
-        process::exit(1);
-    }
-
-    if args.len() > 3 {
-        eprintln!("expected init jit <dir>");
-        process::exit(1);
-    }
-
-    let path_buf_res: Result<PathBuf, std::convert::Infallible> = PathBuf::from_str(&args[2]);
-
-    match path_buf_res {
-        Ok(path_buf) => {
-            let path = path_buf.as_path();
-            if path.is_absolute() {
-                fs::create_dir_all(&path)?;
-                println!("made a new directory!");
-                Ok(())
-            } else {
-                let cwd_path_res = env::current_dir()?;
-                let cwd_path = cwd_path_res.as_path();
-                let new_dir = cwd_path.join(&path_buf);
-                fs::create_dir_all(&new_dir)?;
-                println!("made a new relative directory!");
-                Ok(())
-            }
-        }
-        Err(_) => {
-            eprintln!("malformed path");
-            Ok(())
-        }
-    }
-
-    
+    Ok(())
 }
 
+fn init(args: &Vec<String>) -> io::Result<()> {
+    let default_dir = &"./".to_string();
+    let dir: &String = args.get(2).unwrap_or_else(|| default_dir);
+    let path: PathBuf = fs::canonicalize(dir).or_else(|_| {
+        fs::create_dir_all(dir)?;
+        dbg!("creating new directory {:?}", dir);
+        Ok::<PathBuf, io::Error>(PathBuf::from(dir))
+    })?;
+    println!("Initialized empty Git repository in {}", path.display());
+    initialize_repo_directory(path)?;
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = env::args().collect();
+    let default_dir = &"./".to_string();
+    let cmd: &String = args.get(1).unwrap_or_else(|| default_dir);
+    match Command::from(&cmd[..]) {
+        Command::Init => {
+            match init(&args) {
+                Ok(_) => {
+                    println!("init success");
+                }
+                Err(_) => {
+                    eprintln!("init failure");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Command::Commit => {
+            let root_path = match current_dir() {
+                Ok(cwd) => cwd,
+                Err(_) => {
+                    eprintln!("current_dir() failure in commit case.");
+                    process::exit(1);
+                }
+            };
+            let mut git_path = PathBuf::from(&root_path);
+            git_path.push(".git");
+            let mut db_path = PathBuf::from(&git_path);
+            db_path.push("objects");
+            println!("git path:{}", git_path.display());
+            println!("db path: {}", db_path.display());
+            let workspace = Workspace::new(root_path.clone());
+            let files = workspace.list_files()?;
+            for file in files {
+                eprintln!("{}", file.as_path().display());
+            }
+            
+        }
+        Command::UnknownCommand => {
+            eprintln!("Usage: {} <command> [<directory>]", args[0]);
+            process::exit(1);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+enum Command {
+    Init,
+    Commit,
+    UnknownCommand
+}
+
+impl From<&str> for Command {
+    fn from(s: &str) -> Self {
+        match s {
+            "init" => Command::Init,
+            "commit" => Command::Commit,
+            _ => Command::UnknownCommand
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Workspace {
+    ignore: [&'static str; 7],
+    path: PathBuf,
+}
+
+impl Workspace {
+    fn new(path: PathBuf) -> Self {
+        return Workspace {
+            ignore: [".", "..", ".vscode", ".git", "target", "src", ".gitignore"],
+            path: path
+        };
+    }
+
+
+
+    fn list_files(&self) -> io::Result<Vec<PathBuf>> {
+        let read_files = fs::read_dir(PathBuf::from(&self.path));
+        let mut v: Vec<PathBuf> = Vec::new();
+
+        match read_files {
+            Ok(files) => {
+                for f in files {
+                    let dir = f?;
+                    let path = dir.path().clone();
+                    let mut res = Some(path.clone());
+                    for skip in self.ignore {
+                        if path.clone().as_path().ends_with(skip) {
+                            res = None;
+                        }
+                    }
+                    match res {
+                        Some(p) => {
+                            v.push(p);
+                        }
+                        None => {
+                            
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                eprintln!("error reading files in current directory");
+                process::exit(1);
+            }
+        }
+        Ok(v)
+    }
+}
+    
