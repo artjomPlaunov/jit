@@ -1,7 +1,5 @@
-
 use std::{
-    env,
-    fs,
+    env, fs,
     io::{self},
     path::PathBuf,
     process,
@@ -9,8 +7,10 @@ use std::{
 
 mod blob;
 mod database;
+mod entry;
+mod tree;
 mod workspace;
-
+mod traits;
 
 fn initialize_repo_directory(mut path_buf: PathBuf) -> io::Result<()> {
     path_buf.push(".git");
@@ -67,13 +67,24 @@ fn main() -> io::Result<()> {
             let workspace = workspace::Workspace::new(root_path);
             let database = database::Database::new(db_path);
             let files = workspace.list_files()?;
+            let mut entries = Vec::new();
             for file in files {
                 let data = workspace.read_data(&file)?;
                 let mut blob = blob::Blob::new(&data);
                 database.store(&mut blob)?;
+                
+                let filename = file.file_name().unwrap().to_str().unwrap().to_string();
+                let entry = entry::Entry::new(filename, &blob.object_id);
+
+                entries.push(entry);
+
                 let retrieve = database.inflate(&blob.object_id);
                 dbg!(retrieve);
             }
+            let mut tree = tree::Tree::new(entries);
+            let _ = database.store(&mut tree).unwrap();
+            let tree_data = database.inflate(&tree.object_id);
+            hexdump::hexdump(&tree_data.as_bytes());
         }
         Command::Unknown => {
             eprintln!("Usage: {} <command> [<directory>]", args[0]);
@@ -91,11 +102,11 @@ enum Command {
 }
 
 impl From<&str> for Command {
-  fn from(s: &str) -> Self {
-      match s {
-          "init" => Command::Init,
-          "commit" => Command::Commit,
-          _ => Command::Unknown,
-      }
-  }
+    fn from(s: &str) -> Self {
+        match s {
+            "init" => Command::Init,
+            "commit" => Command::Commit,
+            _ => Command::Unknown,
+        }
+    }
 }
